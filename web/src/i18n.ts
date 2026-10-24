@@ -44,6 +44,8 @@ const en = {
   mark_prepared: "In the output folder",
   mark_done: "done",
   mark_todo: "not yet",
+  mark_read: "Mark as read",
+  mark_unread: "Read (click to mark as unread)",
   preparing: "Moving new PDFs to the output folder",
   progress: "Processing",
   progress_papers: "papers done",

@@ -10,6 +10,7 @@ import { runProgress } from "./progress";
 
 const POLL_MS = 1000;
 const COLLAPSED_KEY = "paper-viewer:collapsed";
+const READ_KEY = "paper-viewer:read";
 const finished = (j: JobInfo) => j.status !== "queued" && j.status !== "running";
 const resumable = (j: JobInfo) => !!j.id && (j.status === "failed" || j.status === "interrupted");
 // jobs name their paper by the PDF hash, which survives the folder being made or moved
@@ -271,13 +272,25 @@ function JobLog({ job, onResume }: { job: JobInfo; onResume: () => void }) {
   );
 }
 
-function loadCollapsed(): Set<string> {
+function loadSet(key: string): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]"));
+    return new Set(JSON.parse(localStorage.getItem(key) ?? "[]"));
   } catch {
     return new Set();
   }
 }
+
+/** Flip one value of a set remembered in this browser. */
+const toggleStored = (key: string, value: string) => (cur: Set<string>) => {
+  const next = new Set(cur);
+  if (!next.delete(value)) next.add(value);
+  try {
+    localStorage.setItem(key, JSON.stringify([...next]));
+  } catch {
+    /* private window: not remembered */
+  }
+  return next;
+};
 
 export default function Library() {
   const [papers, setPapers] = useState<PaperEntry[] | null>(null);
@@ -289,13 +302,23 @@ export default function Library() {
   const [choice, setChoice] = useState<AgentChoice>({ model: "", effort: "" });
   const [parallel, setParallel] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadSet(COLLAPSED_KEY));
+  // papers the user marked as read, by jobKey (the PDF hash survives the folder being moved)
+  const [read, setRead] = useState<Set<string>>(() => loadSet(READ_KEY));
   // the select circles, Select all and the Process menu show only in select mode
   const [selecting, setSelecting] = useState(false);
   const [note, setNote] = useState("");
   const [prep, setPrep] = useState<PrepareState | null>(null);
 
-  const refresh = useCallback(() => listPapers().then(setPapers, (e) => setError(String(e.message ?? e))), []);
+  // bumped by whatever may start work (a job, or a list reload: the server then prepares new src/ PDFs) to restart
+  // the polling below, which stops while nothing runs
+  const [wake, setWake] = useState(0);
+  const poll = useRef({ last: "", seen: new Set<string>(), lastPrep: "" });
+
+  const refresh = useCallback(() => listPapers().then((ps) => {
+    setPapers(ps);
+    setWake((w) => w + 1);
+  }, (e) => setError(String(e.message ?? e))), []);
   useEffect(() => {
     refresh();
     getConfig().then((c) => {
@@ -308,41 +331,47 @@ export default function Library() {
   }, [refresh]);
 
   // one poll for every job (also brings back the logs after a reload or a viewer restart); the list reloads when a
-  // job finishes
+  // job finishes. Each tick tells whether work is left; once none is, the polling stops until the next wake.
   useEffect(() => {
-    let last = "";
-    const seen = new Set<string>();
+    const st = poll.current;
     const tick = () =>
       listJobs().then((list) => {
         const text = JSON.stringify(list);
-        if (text === last) return;
-        last = text;
-        const ended = list.filter((j) => finished(j) && !seen.has(j.id));
-        ended.forEach((j) => seen.add(j.id));
-        setJobs((cur) => ({
-          ...Object.fromEntries(Object.entries(cur).filter(([, j]) => !j.id)),
-          ...Object.fromEntries(list.map((j) => [j.paper, j])),
-        }));
-        if (ended.length) refresh();
-      }, () => {});
+        if (text !== st.last) {
+          st.last = text;
+          const ended = list.filter((j) => finished(j) && !st.seen.has(j.id));
+          ended.forEach((j) => st.seen.add(j.id));
+          setJobs((cur) => ({
+            ...Object.fromEntries(Object.entries(cur).filter(([, j]) => !j.id)),
+            ...Object.fromEntries(list.map((j) => [j.paper, j])),
+          }));
+          if (ended.length) refresh();
+        }
+        return list.some((j) => !finished(j));
+      }, () => true); // server unreachable: keep asking
     // new src/ PDFs the server is moving into the output folder: the list reloads as each one is done
-    let lastPrep = "";
     const tickPrep = () =>
       getPrepare().then((s) => {
         const key = `${s.running}:${s.done}:${s.started}`;
-        if (key === lastPrep) return;
-        if (lastPrep) refresh(); // a PDF was prepared, or the batch ended
-        lastPrep = key;
-        setPrep(s);
-      }, () => {});
-    const tickAll = () => {
-      tick();
-      tickPrep();
-    };
-    tickAll();
+        if (key !== st.lastPrep) {
+          if (st.lastPrep) refresh(); // a PDF was prepared, or the batch ended
+          st.lastPrep = key;
+          setPrep(s);
+        }
+        return s.running;
+      }, () => true);
+    let alive = true;
+    const tickAll = () =>
+      Promise.all([tick(), tickPrep()]).then((busy) => {
+        if (alive && !busy.some(Boolean)) clearInterval(timer);
+      });
     const timer = setInterval(tickAll, POLL_MS);
-    return () => clearInterval(timer);
-  }, [refresh]);
+    tickAll();
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [refresh, wake]);
 
   const busy = (p: PaperEntry) => !!jobs[jobKey(p)] && !finished(jobs[jobKey(p)]);
   const chosen = (papers ?? []).filter((p) => selected.has(p.id));
@@ -351,6 +380,7 @@ export default function Library() {
     try {
       const job = await startJob(p.id, action, agentChoice, resume);
       setJobs((all) => ({ ...all, [key]: { id: job.job_id, paper: key, action: job.action, status: job.status as JobInfo["status"], lines: [], ...agentChoice } }));
+      setWake((w) => w + 1);
     } catch (e) {
       setJobs((all) => ({ ...all, [key]: { id: "", paper: key, action, status: "failed", lines: [String((e as Error).message ?? e)], ...agentChoice } }));
     }
@@ -382,25 +412,16 @@ export default function Library() {
       ids.forEach((id) => (on ? next.add(id) : next.delete(id)));
       return next;
     });
-  const toggleFolder = (path: string) =>
-    setCollapsed((cur) => {
-      const next = new Set(cur);
-      if (!next.delete(path)) next.add(path);
-      try {
-        localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
-      } catch {
-        /* private window: not remembered */
-      }
-      return next;
-    });
+  const toggleFolder = (path: string) => setCollapsed(toggleStored(COLLAPSED_KEY, path));
 
   const depthStyle = (depth: number) => ({ "--depth": depth }) as CSSProperties;
   const renderPaper = (p: PaperEntry, depth: number) => {
     const job = jobs[jobKey(p)];
     const on = selecting && selected.has(p.id);
+    const isRead = read.has(jobKey(p));
     return (
       <div key={p.id} className="tree-item" role="treeitem" aria-selected={on} data-paper-id={p.id} style={depthStyle(depth)}>
-        <div className={`tree-row paper-row${on ? " selected" : ""}`}>
+        <div className={`tree-row paper-row${on ? " selected" : ""}${isRead ? " read" : ""}`}>
           <span className="twisty-space" />
           <FileIcon />
           <span className="name" title={p.folder_rel}>{p.name}</span>
@@ -408,6 +429,15 @@ export default function Library() {
           {p.status === "evicted" && <span className="chip warn">{t("evicted")}</span>}
           <span className="pages num">{p.status !== "new" && `${p.num_pages}p`}</span>
           <Marks p={p} />
+          <button
+            className="read-toggle"
+            aria-pressed={isRead}
+            aria-label={`${t("mark_read")} ${p.name}`}
+            title={t(isRead ? "mark_unread" : "mark_read")}
+            onClick={() => setRead(toggleStored(READ_KEY, jobKey(p)))}
+          >
+            <CheckIcon />
+          </button>
           <button className="primary" disabled={p.status !== "ok"} onClick={() => navigate(`/r/${p.id}`)}>{t("open")}</button>
           {selecting && <SelectCircle state={on} label={`${t("select")} ${p.name}`} onChange={(v) => select([p.id], v)} />}
         </div>

@@ -170,6 +170,12 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 0; background: v
 .mark svg { width: 18px; height: 18px; }
 .mark.on { color: var(--accent); }
 .paper-row button:not(.select-circle) { padding: 7px 10px; font-size: 13px; }
+/* read toggle: a grey check, blue once read; a read paper's name dims */
+.paper-row button.read-toggle { padding: 5px; background: transparent; color: var(--border-strong); }
+.paper-row button.read-toggle:hover { background: var(--surface); color: var(--accent); }
+.paper-row button.read-toggle[aria-pressed="true"] { color: var(--accent); }
+.read-toggle svg { width: 18px; height: 18px; }
+.paper-row.read .name { font-weight: 500; color: var(--text-secondary); }
 .select-circle {
   padding: 4px; margin-left: 2px; border-radius: 50%; background: transparent; color: var(--border-strong);
 }
