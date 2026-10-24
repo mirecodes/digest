@@ -72,3 +72,37 @@ test("9: hovering a translation block outlines its source block in the PDF", asy
   await page.mouse.move(5, 5);
   await expect(outline).toHaveCount(0);
 });
+
+test("the divider snaps to 1/3, 1/2 and 2/3; past 2/3 two-column translation cards become one column", async ({ page }) => {
+  await openDemo(page);
+  const divider = page.getByRole("separator");
+  const panes = (await page.locator(".panes").boundingBox())!;
+  const lefts = () => page.locator('.tr-card[data-page="1"] .tr-block')
+    .evaluateAll((els) => new Set(els.map((e) => Math.round(e.getBoundingClientRect().left))).size);
+  const dragTo = async (ratio: number) => {
+    const d = (await divider.boundingBox())!;
+    await page.mouse.move(d.x + d.width / 2, d.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(panes.x + panes.width * ratio, d.y + 200, { steps: 8 });
+    await page.mouse.up();
+  };
+  expect(await lefts()).toBe(2); // left and right column
+
+  await dragTo(1 / 3 + 10 / panes.width); // 10 px off: pulled onto 1/3
+  await expect(divider).toHaveAttribute("aria-valuenow", "33");
+  const pdf = (await page.locator(".pdf-col").boundingBox())!;
+  expect(Math.abs(pdf.width - panes.width / 3)).toBeLessThan(2);
+
+  await dragTo(0.75);
+  await expect(divider).toHaveAttribute("aria-valuenow", "75");
+  await expect(page.locator(".tr-content")).toHaveClass(/\bsingle\b/);
+  await expect.poll(lefts).toBe(1); // every block starts at the text margin, in reading order
+  const size = await page.locator('.tr-card[data-page="1"] .tr-block.kind-paragraph').first().evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
+  expect(size).toBeGreaterThanOrEqual(14);
+
+  await divider.focus();
+  await page.keyboard.press("ArrowLeft"); // back to the 2/3 snap point: the replica layout returns
+  await expect(divider).toHaveAttribute("aria-valuenow", "67");
+  await expect(page.locator(".tr-content")).not.toHaveClass(/\bsingle\b/);
+  await expect.poll(lefts).toBe(2);
+});

@@ -30,6 +30,11 @@ MIN_CLUSTER_AREA, MIN_CLUSTER_PATHS = 1500.0, 3
 UNLABELED_MIN_SHARE = 0.15          # caption-less graphics become figures above this share of the page
 CROP_DPI = 200
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|Math|Symbol|STIX", re.I)
+MATH_CHAR_RE = re.compile(r"[=∑∏∫∼≈≤≥←→⇒∀∃∈∂∇±×·√∥α-ωΑ-Ω]")
+EQ_PAD = (10.0, 4.0)                # (x, y) pt: fragments this close to an equation's box belong to it
+EQ_FRAGMENT_CHARS = 60              # longer blocks are text, not equation fragments
+EQ_FRAGMENT_WORDS = 4               # ... and so are blocks with this many ordinary words ("where x is the ...")
+WORD_RE = re.compile(r"[A-Za-z]{3,}")
 # Same alternatives as extract_pdf.CAPTION_RE, but "." or ":" must follow the number so that prose starting a
 # block ("Fig. 2 shows ...") is not a caption. IEEE "TABLE I" may stand alone on its line.
 CAPTION_RE = re.compile(r"^(?:((?i:figure|fig\.|table|tab\.))\s*(\d+)\s*[.:]|(TABLE|Table)\s+([IVXL]+)\b\s*(?:[.:]|$))")
@@ -392,6 +397,93 @@ def detect_figures(page_no, blocks, rects, width, height, columns, split) -> lis
 
 
 # --------------------------------------------------------------------------- #
+# Block repair: PyMuPDF sometimes cuts one paragraph into blocks of a line or two, and one display equation into
+# fragments (symbols, sub/superscripts, the number). Both are joined back after classification.
+# --------------------------------------------------------------------------- #
+def line_pitch(pages_blocks) -> float:
+    """Median top-to-top distance of consecutive lines inside blocks: the body line spacing."""
+    gaps = sorted(round(l2[1] - l1[1], 1) for blocks in pages_blocks for b in blocks
+                  for l1, l2 in zip(b["line_boxes"], b["line_boxes"][1:]) if l2[1] - l1[1] > 0.5 * b["font_size"])
+    return gaps[len(gaps) // 2] if gaps else 0.0
+
+
+def _absorb(a, b, kind=None) -> None:
+    """Merge block b into a (a keeps its id)."""
+    chars = a["chars"] + b["chars"]
+    for key in ("font_size", "math"):
+        a[key] = (a[key] * a["chars"] + b[key] * b["chars"]) / chars
+    a["bold"] = a["bold"] and b["bold"]
+    a["bbox"], a["chars"], a["sizes"] = _union(a["bbox"], b["bbox"]), chars, a["sizes"] + b["sizes"]
+    a["lines"], a["line_boxes"] = a["lines"] + b["lines"], a["line_boxes"] + b["line_boxes"]
+    a["text"] = join_lines([a["text"], b["text"]])
+    a["words"] = len(a["text"].split())
+    a["kind"] = kind or a["kind"]
+
+
+def _hanging(b) -> bool:
+    """Lines after the first start right of it (reference entries)."""
+    lb = b["line_boxes"]
+    return len(lb) > 1 and min(l[0] for l in lb[1:]) > lb[0][0] + 3
+
+
+def _continues(a, b, pitch) -> bool:
+    """b is the next piece of paragraph a: same column and font, body line spacing, b not indented, and a's last
+    line reaches the right edge (a paragraph's last line is usually short)."""
+    if a["kind"] != "paragraph" or b["kind"] != "paragraph" or a["column"] != b["column"] or _hanging(a) or _hanging(b):
+        return False
+    last, first = a["line_boxes"][-1], b["line_boxes"][0]
+    left = min(l[0] for l in a["line_boxes"])
+    right = max(a["bbox"][2], b["bbox"][2])
+    return (abs(a["font_size"] - b["font_size"]) <= 0.6 and 0 < first[1] - last[1] <= 1.25 * pitch
+            and abs(first[0] - left) <= 3 and last[2] >= right - 12)
+
+
+def merge_paragraphs(blocks, pitch) -> list[dict]:
+    if not pitch:
+        return blocks
+    out = []
+    for b in sorted(blocks, key=lambda b: (b["column"], b["bbox"][1], b["bbox"][0])):
+        if out and _continues(out[-1], b, pitch):
+            _absorb(out[-1], b)
+        else:
+            out.append(b)
+    return out
+
+
+def _fragment(b) -> bool:
+    return (b["kind"] in ("equation", "paragraph", "list", "heading") and len(b["lines"]) <= 3
+            and b["chars"] <= EQ_FRAGMENT_CHARS and len(WORD_RE.findall(b["text"])) < EQ_FRAGMENT_WORDS)
+
+
+def group_equations(blocks, columns, split) -> list[dict]:
+    """Touching short fragments with math in them become one equation block (shown as one crop in the viewer)."""
+    def near(r, q):
+        return r[0] <= q[2] + EQ_PAD[0] and q[0] <= r[2] + EQ_PAD[0] and r[1] <= q[3] + EQ_PAD[1] and q[1] <= r[3] + EQ_PAD[1]
+
+    groups: list[tuple[tuple, list[dict]]] = []  # (box of the members, members): limits under a sum join its box
+    for b in sorted((b for b in blocks if _fragment(b)), key=lambda b: b["k"]):
+        box, members = b["bbox"], [b]
+        while hit := [g for g in groups if near(box, g[0])]:
+            groups = [g for g in groups if g not in hit]
+            for g in hit:
+                box, members = _union(box, g[0]), members + g[1]
+        groups.append((box, members))
+    groups = [g for _, g in groups]
+    gone = set()
+    for g in groups:
+        if len(g) < 2 or not any(o["kind"] == "equation" or o["math"] >= 0.2 or MATH_CHAR_RE.search(o["text"]) for o in g):
+            continue
+        g.sort(key=lambda o: (o["bbox"][0], o["bbox"][1]))  # left to right; the text is not shown
+        head = min(g, key=lambda o: o["k"])
+        for o in g:
+            if o is not head:
+                _absorb(head, o)
+                gone.add(id(o))
+        head["kind"], head["column"] = "equation", column_of(head["bbox"], columns, split)
+    return [b for b in blocks if id(b) not in gone]
+
+
+# --------------------------------------------------------------------------- #
 # Classification and reading order
 # --------------------------------------------------------------------------- #
 def classify(b, body) -> str:
@@ -468,6 +560,7 @@ def analyze(pdf: Path, overrides: dict, translate_references: bool) -> tuple[dic
     sizes = [(p.cropbox.width, p.cropbox.height) for p in doc]      # unrotated analysis space
     pages_blocks = [raw_blocks(p) for p in doc]
     body = body_font_size(pages_blocks)
+    pitch = line_pitch(pages_blocks)
     mark_header_footer(pages_blocks, [h for _, h in sizes])
 
     pages, figures, in_refs = [], [], False
@@ -496,6 +589,7 @@ def analyze(pdf: Path, overrides: dict, translate_references: bool) -> tuple[dic
         for b in blocks:
             if b["kind"] is None:
                 b["kind"] = "caption" if b.get("caption") else classify(b, body)
+        blocks = group_equations(merge_paragraphs(blocks, pitch), columns, split)  # prose first: its lines are not fragments
 
         # reading order: figure regions stand in for their member blocks
         members = {f["id"]: sorted((b for b in blocks if b["kind"] in ("figure_text", "table_text") and b["figure_id"] == f["id"]),

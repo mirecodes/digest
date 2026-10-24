@@ -1,4 +1,4 @@
-// Overlays (Phase 4, docs/viewer-plan.md §12.3 items 4-5): highlight layer, figure note popover, sidebar tabs.
+// Overlays (Phase 4, docs/viewer-plan.md §12.3 items 4-5): highlight layer, figure note popover (click), sidebar tabs.
 import { expect, test, type Page } from "@playwright/test";
 
 async function openDemo(page: Page) {
@@ -14,35 +14,43 @@ async function ptToClient(page: Page, n: number, x: number, y: number) {
   return { x: box.x + x * s, y: box.y + y * s, s };
 }
 
-test("4: hovering Figure 1 opens its note; the badge pins it; Esc closes", async ({ page }) => {
+test("4: clicking Figure 1 opens its note; a second click, a click elsewhere, or Esc closes it", async ({ page }) => {
   await openDemo(page);
   await page.locator('.pdf-page[data-page="2"]').scrollIntoViewIfNeeded();
+  await expect(page.locator(".fig-badge")).toHaveCount(0); // no ⓘ marks over the page
   const c = await ptToClient(page, 2, 165, 160); // inside fig-p2-0 [85, 100, 245, 220]
   await page.mouse.move(c.x, c.y);
+  await page.waitForTimeout(600);
   const pop = page.getByTestId("figure-popover");
-  await expect(pop).toBeVisible({ timeout: 1000 });
+  await expect(pop).toHaveCount(0); // hovering alone does not open it
+
+  await page.mouse.click(c.x, c.y);
+  await expect(pop).toHaveAttribute("data-pinned", "true");
   await expect(pop).toContainText("Figure 1");
   await expect(pop).toContainText("FooNet 구조 개요도");
   await expect(pop.locator(".cite").first()).toBeVisible(); // [E#, p.N] rendered as a citation chip
-
-  await page.mouse.move(5, 5); // leaving closes an unpinned popover
-  await expect(pop).toHaveCount(0);
-
-  await page.locator('.fig-badge[data-figure-id="fig-p2-0"]').click();
-  await expect(pop).toHaveAttribute("data-pinned", "true");
   await page.mouse.move(5, 5);
   await page.waitForTimeout(400);
-  await expect(pop).toBeVisible();
+  await expect(pop).toBeVisible(); // stays while the pointer is away
   await pop.getByRole("button", { name: "EN" }).click();
   await expect(pop).toContainText("Overview of FooNet");
+
+  await page.mouse.click(c.x, c.y); // the same figure again
+  await expect(pop).toHaveCount(0);
+  await page.mouse.click(c.x, c.y);
+  await expect(pop).toBeVisible();
+  const text = await ptToClient(page, 2, 450, 400); // right column text, outside every figure
+  await page.mouse.click(text.x, text.y);
+  await expect(pop).toHaveCount(0);
+  await page.mouse.click(c.x, c.y);
   await page.keyboard.press("Escape");
   await expect(pop).toHaveCount(0);
 });
 
-test("4b: a skipped table explains why there is no note", async ({ page }) => {
+test("4b: a skipped table explains why there is no note (opened from the sidebar)", async ({ page }) => {
   await openDemo(page);
-  await page.locator('.pdf-page[data-page="3"]').scrollIntoViewIfNeeded();
-  await page.locator('.fig-badge[data-figure-id="fig-p3-1"]').click();
+  await page.getByRole("tab", { name: "Figures" }).click();
+  await page.locator(".fig-list button", { hasText: "Table 1" }).click();
   await expect(page.getByTestId("figure-popover")).toContainText("skipped");
 });
 

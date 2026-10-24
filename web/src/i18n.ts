@@ -80,6 +80,7 @@ const en = {
   note_skipped: "No note: skipped while annotating",
   low_conf: "The detected box may not cover the whole figure.",
   close: "Close",
+  split: "Resize the panes (arrow keys: 1/3, 1/2, 2/3)",
   key_points: "Key points of this paper",
   cat_problem: "Problem",
   cat_assumption: "Key assumption",

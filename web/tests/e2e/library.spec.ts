@@ -22,7 +22,7 @@ test("a job cut off by a viewer stop shows as stopped and resumes with the same 
   await row.getByRole("button", { name: "Resume" }).click();
   await expect(log.locator("pre")).toContainText("PAPER_AGENT_EFFORT=low");
   await expect(log.locator("pre")).toContainText("--only translation --resume");
-  await expect(log.locator("[data-status]")).toHaveAttribute("data-status", "done", { timeout: 15_000 });
+  await expect(log).toHaveCount(0, { timeout: 15_000 }); // a done job hides its log
   await expect(row.getByRole("button", { name: "Resume" })).toHaveCount(0);
 });
 
@@ -47,7 +47,7 @@ test("the Process menu runs one step and streams its log", async ({ page }) => {
   const log = row.getByTestId("job-log");
   await expect(log.locator("pre")).toContainText("stub annotate.sh -n");
   await expect(log.locator("pre")).toContainText("--only highlights,figures");
-  await expect(log.locator("[data-status]")).toHaveAttribute("data-status", "done", { timeout: 15_000 });
+  await expect(log).toHaveCount(0, { timeout: 15_000 }); // a done job hides its log
 });
 
 test("a new src/ paper is listed once and any step runs on its own, preparing the paper first", async ({ page }) => {
@@ -67,7 +67,7 @@ test("a new src/ paper is listed once and any step runs on its own, preparing th
   await expect(log.locator("pre")).toContainText("stub internal/prepare.sh --ensure -n");
   await expect(log.locator("pre")).toContainText("--only highlights,figures");
   await expect(log.locator("pre")).not.toContainText("digest.sh");
-  await expect(log.locator("[data-status]")).toHaveAttribute("data-status", "done", { timeout: 15_000 });
+  await expect(log).toHaveCount(0, { timeout: 15_000 }); // a done job hides its log
 });
 
 test("the chosen model and effort reach the job", async ({ page }) => {
@@ -80,7 +80,7 @@ test("the chosen model and effort reach the job", async ({ page }) => {
   await runOn(page, ["Long Paper (2024)"], "Translation");
   const log = page.locator("[data-paper-id]", { hasText: "Long Paper (2024)" }).getByTestId("job-log");
   await expect(log.locator("pre")).toContainText("PAPER_AGENT_EFFORT=high  PAPER_AGENT_MODEL=claude-sonnet-5-5");
-  await expect(log.locator("[data-status]")).toHaveAttribute("data-status", "done", { timeout: 15_000 });
+  await expect(log).toHaveCount(0, { timeout: 15_000 }); // a done job hides its log
   await page.reload();
   await expect(page.getByLabel("Model")).toHaveValue("claude-sonnet-5-5"); // remembered in this browser
 });
@@ -109,7 +109,7 @@ test("a src/ folder collapses, and its circle selects every paper in it with a t
   await expect(page.getByRole("status")).toContainText("1 queued");
   const log = row.getByTestId("job-log");
   await expect(log.locator("pre")).toContainText("--only translation");
-  await expect(log.locator("[data-status]")).toHaveAttribute("data-status", "done", { timeout: 15_000 });
+  await expect(log).toHaveCount(0, { timeout: 15_000 }); // a done job hides its log
 });
 
 test("select all queues the papers with work left and skips the finished ones", async ({ page }) => {
@@ -123,11 +123,11 @@ test("select all queues the papers with work left and skips the finished ones", 
   await expect(page.getByRole("menuitem", { name: "Annotation" }).locator(".todo")).toHaveText("2");
   await page.getByRole("menuitem", { name: "Annotation" }).click();
   await expect(page.getByRole("status")).toContainText("2 queued · 1 skipped");
-  for (const name of ["Long Paper (2024)", "fresh"]) {
-    const log = page.locator("[data-paper-id]", { hasText: name }).getByTestId("job-log");
-    await expect(log.locator("pre")).toContainText("--only highlights,figures");
-    await expect(log.locator("[data-status]")).toHaveAttribute("data-status", "done", { timeout: 15_000 });
-  }
+  const logs = ["Long Paper (2024)", "fresh"].map((name) =>
+    page.locator("[data-paper-id]", { hasText: name }).getByTestId("job-log"));
+  // both logs first: a job that is done hides its log, and the two may run at once
+  for (const log of logs) await expect(log.locator("pre")).toContainText("--only highlights,figures");
+  for (const log of logs) await expect(log).toHaveCount(0, { timeout: 15_000 });
 });
 
 test("annotated paper shows the bundled translation and blue status marks", async ({ page }) => {

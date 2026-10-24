@@ -71,6 +71,8 @@ If glossary.md exists for another language, rewrite it for `<lang>`.
 For every `pNNN.src.md`, write `pNNN.<lang>.md` with exactly the same `<!-- BLOCK id -->` markers, same order,
 one translation under each marker (template: `templates/translation.md`). Rules:
 - Faithful, sentence by sentence. Never summarize, merge, or drop sentences.
+- Each translation is one paragraph: no line breaks inside it, even where the source text wrapped (the viewer
+  keeps every line break you write).
 - Keep math, symbols, variable names, citation numbers like `[12]`, URLs, and all numbers exactly.
   "Figure 3 / Table 2 / Eq. (4)" → the target language's words, keeping the number (ko: "그림 3 / 표 2 / 식 (4)").
 - First occurrence of a technical term: `<target term>(English)`. Afterwards the target term only, per the glossary.

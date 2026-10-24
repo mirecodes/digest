@@ -293,9 +293,10 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 0; background: v
 .pdf-col, .tr-col { min-width: 0; display: flex; }
 .pdf-col { flex: 0 0 50%; }
 .tr-col { flex: 1 1 0; }
-.divider { width: 1px; flex: none; cursor: col-resize; background: var(--border); position: relative; }
+.divider { width: 1px; flex: none; cursor: col-resize; background: var(--border); position: relative; z-index: 2; }
 .divider::after { content: ""; position: absolute; inset: 0 -4px; }
-.divider:hover { background: var(--accent); }
+.divider:hover, .divider.dragging, .divider:focus-visible { background: var(--accent); outline: none; }
+.divider.snapped { box-shadow: 0 0 0 1.5px var(--accent); } /* held at 1/3, 1/2 or 2/3 */
 .pane { position: relative; overflow: auto; flex: 1; outline: none; overscroll-behavior: contain; background: var(--surface); }
 
 /* ---- PDF pane */
@@ -355,7 +356,8 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 0; background: v
 }
 
 /* ---- translation pane */
-.tr-content { margin: 0 auto; padding: 16px 0; }
+.tr-pane { overflow-x: hidden; }
+.tr-content { margin: 0 auto; padding: 16px 0; transform-origin: 50% 0; }
 .tr-card {
   position: relative; background: var(--bg); border-radius: var(--radius-card); box-shadow: var(--shadow-card), 0 0 0 1px var(--border);
   margin-bottom: 16px; line-height: 1.6; color: var(--text-secondary);
@@ -400,3 +402,4 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 0; background: v
   display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none;
 }
 .textLayer.selecting .endOfContent { top: 0; }
+.panes.resizing .textLayer { display: none; } /* thousands of spans would be laid out again every drag frame */

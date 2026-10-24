@@ -411,7 +411,8 @@ export default function Library() {
           <button className="primary" disabled={p.status !== "ok"} onClick={() => navigate(`/r/${p.id}`)}>{t("open")}</button>
           {selecting && <SelectCircle state={on} label={`${t("select")} ${p.name}`} onChange={(v) => select([p.id], v)} />}
         </div>
-        {job && <JobLog job={job} onResume={() => resume(p, job)} />}
+        {/* a finished job shows only as the row's blue step marks */}
+        {job && job.status !== "done" && <JobLog job={job} onResume={() => resume(p, job)} />}
       </div>
     );
   };

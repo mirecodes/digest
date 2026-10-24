@@ -17,7 +17,7 @@ from functions.build_viewer import GOLDEN, build_viewer
 from functions.extract_pdf import extract
 from functions.fixtures import build_foonet, build_long, prepare_demo, write_annotations
 from functions.verify_annotations import verify_annotations
-from functions.layout import build_layout
+from functions.layout import build_layout, group_equations, merge_paragraphs
 from functions.paper_name import Meta, find_arxiv_id, format_name
 from functions.papers import paper_id, resolve_for_annotate, scan
 from functions.prepare import EXIT_DONE, SRC_DIR, prepare_one, select, target_dir
@@ -183,6 +183,26 @@ def iou(a, b) -> float:
     ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
     union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - ix
     return ix / union if union else 0.0
+
+
+def check_block_repair(failures: list) -> None:
+    """Paragraphs cut into one-line blocks are joined (not across an indent); equation fragments become one block."""
+    def blk(k, kind, x0, y0, x1, text, lines=1, pitch=18.0, first_x=None):
+        boxes = [((first_x if i == 0 and first_x else x0), y0 + i * pitch, x1, y0 + i * pitch + 12) for i in range(lines)]
+        return {"k": k, "kind": kind, "bbox": (x0, y0, x1, boxes[-1][3]), "lines": [text] * lines, "line_boxes": boxes,
+                "text": text, "chars": len(text), "words": len(text.split()), "font_size": 12.0, "bold": False,
+                "math": 0.0, "sizes": [(12.0, len(text))], "figure_id": None, "column": 0}
+    prose = "x" * 80
+    blocks = [blk(0, "paragraph", 72, 100, 540, prose, lines=2), blk(1, "paragraph", 72, 136, 540, prose),
+              blk(2, "paragraph", 72, 154, 400, prose),                       # short last line: the paragraph ends
+              blk(3, "paragraph", 72, 172, 540, prose, first_x=90),           # indented: a new paragraph
+              blk(4, "paragraph", 140, 300, 200, "L(θ) ="), blk(5, "paragraph", 202, 296, 260, "min(πθ"),
+              blk(6, "equation", 262, 300, 300, ", (3)"), blk(7, "paragraph", 72, 330, 300, "where θ is the policy and more")]
+    out = group_equations(merge_paragraphs(blocks, 18.0), 1, None)
+    got = sorted((b["k"], b["kind"]) for b in out)
+    want = [(0, "paragraph"), (3, "paragraph"), (4, "equation"), (7, "paragraph")]
+    if got != want:
+        failures.append(f"block repair: expected {want}, got {got}")
 
 
 def check_layout(paper: Path, truth: dict, failures: list) -> None:
@@ -554,6 +574,7 @@ def main() -> int:
                 failures.append(f"bad case: expected warning containing {expected!r}")
 
         check_layout(paper, truth, failures)
+        check_block_repair(failures)
         check_anchor(paper / "paper.pdf", truth, failures)
         check_papers(Path(tmp) / "out", paper, failures)
         make_src(Path(tmp) / "src", paper)

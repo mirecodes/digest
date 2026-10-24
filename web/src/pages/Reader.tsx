@@ -7,6 +7,7 @@ import { t } from "../i18n";
 import { union } from "../lib/highlights";
 import { closePop } from "../lib/popover";
 import { bindScrollSync, type PaneLayout } from "../lib/scrollSync";
+import { SNAPS, SPLIT_MAX, SPLIT_MIN, singleColumn, snapSplit, stepSplit } from "../lib/split";
 import { useStore } from "../lib/store";
 import HeaderBar from "../reader/HeaderBar";
 import { NavContext, type Nav } from "../reader/nav";
@@ -19,7 +20,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 const SPLIT_KEY = "pv.split";
 const readSplit = () => {
   try {
-    return Math.min(0.8, Math.max(0.2, Number(localStorage.getItem(SPLIT_KEY)) || 0.5));
+    return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, Number(localStorage.getItem(SPLIT_KEY)) || 0.5));
   } catch {
     return 0.5;
   }
@@ -34,6 +35,7 @@ export default function Reader({ paperId, initialPage }: { paperId: string; init
   const [doc, setDoc] = useState<pdfjs.PDFDocumentProxy | null>(null);
   const [error, setError] = useState("");
   const [split, setSplit] = useState(readSplit);
+  const [dragging, setDragging] = useState(false); // the translation pane keeps its layout until the drag ends
   const pdfEl = useRef<HTMLDivElement>(null);
   const trEl = useRef<HTMLDivElement>(null);
   const panesEl = useRef<HTMLDivElement>(null);
@@ -49,7 +51,7 @@ export default function Reader({ paperId, initialPage }: { paperId: string; init
         setData(d);
         task = pdfjs.getDocument({
           url: d.paper.pdf_url, standardFontDataUrl: "/pdfjs/standard_fonts/", cMapUrl: "/pdfjs/cmaps/",
-          cMapPacked: true, wasmUrl: "/pdfjs/wasm/", iccUrl: "/pdfjs/iccs/",
+          cMapPacked: true, wasmUrl: "/pdfjs/wasm/", iccUrl: "/pdfjs/iccs/", enableHWA: true, // GPU canvas: large images draw fast
         });
         return task.promise;
       })
@@ -109,6 +111,7 @@ export default function Reader({ paperId, initialPage }: { paperId: string; init
   }, [nav]);
   const onTrLayout = useCallback((l: PaneLayout) => {
     layouts.current.b = l;
+    if (useStore.getState().sync) syncer.current?.align("a"); // cards changed height (resize, one-column switch)
   }, []);
 
   useEffect(() => {
@@ -141,22 +144,38 @@ export default function Reader({ paperId, initialPage }: { paperId: string; init
     return () => window.removeEventListener("keydown", onKey);
   }, [nav]);
 
+  const commitSplit = (v: number) => {
+    setSplit(v);
+    try { localStorage.setItem(SPLIT_KEY, String(v)); } catch { /* ignore */ }
+  };
   const onDividerDown = (e: React.PointerEvent) => {
     const box = panesEl.current!.getBoundingClientRect();
     const target = e.currentTarget as HTMLElement;
     target.setPointerCapture(e.pointerId);
-    const move = (ev: PointerEvent) => setSplit(Math.min(0.8, Math.max(0.2, (ev.clientX - box.left) / box.width)));
+    setDragging(true);
+    let v = split;
+    let frame = 0;
+    const move = (ev: PointerEvent) => {
+      v = snapSplit(ev.clientX - box.left, box.width);
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setSplit(v)); // at most one layout per frame
+    };
     const up = () => {
       target.removeEventListener("pointermove", move);
       target.removeEventListener("pointerup", up);
-      setSplit((v) => {
-        try { localStorage.setItem(SPLIT_KEY, String(v)); } catch { /* ignore */ }
-        return v;
-      });
+      cancelAnimationFrame(frame);
+      commitSplit(v);
+      setDragging(false);
     };
     target.addEventListener("pointermove", move);
     target.addEventListener("pointerup", up);
   };
+  const onDividerKey = (e: React.KeyboardEvent) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    commitSplit(stepSplit(split, e.key === "ArrowLeft" ? -1 : 1));
+  };
+  const snapped = SNAPS.includes(split);
 
   if (error) return <div className="reader-msg error">{t("load_failed")}: {error}</div>;
   if (!data || !doc) return <div className="reader-msg">{t("loading")}</div>;
@@ -166,15 +185,17 @@ export default function Reader({ paperId, initialPage }: { paperId: string; init
         <HeaderBar />
         <div className="reader-body">
           {sidebar && <Sidebar />}
-          <div className="panes" ref={panesEl}>
+          <div className={`panes${dragging ? " resizing" : ""}`} ref={panesEl}>
             <div className="pdf-col" style={{ flexBasis: showTr ? `${split * 100}%` : "100%" }}>
               <PdfPane doc={doc} elRef={pdfEl} onLayout={onPdfLayout} />
             </div>
             {showTr && (
               <>
-                <div className="divider" onPointerDown={onDividerDown} role="separator" aria-orientation="vertical" />
+                <div className={`divider${dragging ? " dragging" : ""}${dragging && snapped ? " snapped" : ""}`}
+                  onPointerDown={onDividerDown} onKeyDown={onDividerKey} tabIndex={0} role="separator" aria-orientation="vertical"
+                  aria-label={t("split")} aria-valuemin={SPLIT_MIN * 100} aria-valuemax={SPLIT_MAX * 100} aria-valuenow={Math.round(split * 100)} />
                 <div className="tr-col">
-                  <TranslationPane elRef={trEl} onLayout={onTrLayout} />
+                  <TranslationPane elRef={trEl} onLayout={onTrLayout} frozen={dragging} single={singleColumn(split)} />
                 </div>
               </>
             )}

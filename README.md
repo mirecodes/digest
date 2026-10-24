@@ -156,8 +156,10 @@ evidence, figure notes) and doing only the rest.
   result, limitation): the agent first writes a reading map (problem, gap, each contribution with how it works and
   what shows it works, limits), then marks the one sentence that states each point. Hover one for its note. Toggle them with the **Highlights** button or `H`, and filter by category in
   the sidebar's Highlights tab.
-- **Figure notes**: hover a figure (or its ⓘ badge) for a floating explanation. Click to keep it open, `Esc` to
+- **Figure notes**: click a figure for a floating explanation; click it again, click elsewhere, or press `Esc` to
   close. The sidebar's Figures tab lists them all.
+- **Pane split**: drag the line between the panes; it snaps to 1/3, 1/2 and 2/3 (arrow keys jump between them).
+  With the PDF wider than 2/3, two-column pages of the translation switch to one column in a larger font.
 - Keys: `H` highlights, `T` translation pane, `S` sync, `[` sidebar, `J`/`K` next/previous page, `/` search.
 
 ## Configuration (`configs/cfg.yaml`)

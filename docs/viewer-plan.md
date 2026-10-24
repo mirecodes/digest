@@ -534,21 +534,21 @@ Same as /paper-digest: under `claude -p`, never pass --force; report instead of 
 └────────────────────┴──────────────────────┴─────────────────────────┴────────────────────┘
 ```
 
-- PdfPane과 TranslationPane 사이 드래그 가능한 divider (기본 50:50, localStorage에 비율 저장).
+- PdfPane과 TranslationPane 사이 드래그 가능한 divider (기본 50:50, localStorage에 비율 저장, 20–80%). 1/3·1/2·2/3에서 20px 안이면 붙는다(`lib/split.ts`). 화살표 키로 이 점들 사이를 옮긴다. 원문 쪽이 2/3을 넘으면 번역 카드의 2단 페이지가 한 단(최소 14px)으로 바뀐다(§8.3). 드래그 중 번역 패널은 CSS scale로만 늘고 줄며, 놓을 때 한 번 다시 배치한다.
 - 번역 패널을 끄면 PdfPane이 가운데 정렬된 단일 뷰.
 - 1280px 미만에서는 Sidebar/Drawer가 오버레이로 뜬다.
 - UI 문자열은 `i18n.ts` (ko 기본). AI 출력 언어 토글(한/EN)은 피규어 해설·하이라이트 노트·새 설명 요청 언어를 바꾼다.
 
 ### 8.2 PdfPane
 
-- `pdfjs-dist`로 문서 로드. 페이지 크기는 `viewer.json.pages`에서 미리 알고 있으므로 **모든 페이지 placeholder를 즉시 정확한 높이로 배치**한 뒤, 뷰포트 ±2 페이지만 canvas + text layer 렌더 (IntersectionObserver). 범위를 벗어난 페이지는 canvas 해제.
+- `pdfjs-dist`로 문서 로드. 페이지 크기는 `viewer.json.pages`에서 미리 알고 있으므로 **모든 페이지 placeholder를 즉시 정확한 높이로 배치**한 뒤, 뷰포트 ±2 페이지를 canvas + text layer로 렌더한다. 이미 그린 페이지는 ±4까지 유지하고, 그 밖에서는 canvas를 해제한다(`lib/pageRender.keepRange`). 렌더는 한 번에 한 job씩, 현재 페이지에 가까운 것부터 돈다(canvas가 text layer보다 먼저). text layer는 마운트당 한 번 만들고 `--total-scale-factor`로 CSS가 늘린다. canvas는 scale이 바뀌는 동안 CSS로 늘였다가, 150ms 뒤 새 canvas에 다시 그려 바꿔 끼운다(빈 프레임 없음). divider 드래그 중에는 text layer를 숨긴다(span 수천 개의 layout이 프레임마다 다시 돌기 때문). `enableHWA`(GPU canvas).
 - canvas는 `devicePixelRatio` 반영. 줌: fit-width(기본), 50–300% 단계.
 - 페이지 DOM 구조 (위에서 아래로 z 순서):
   1. canvas
   2. `HighlightLayer` (pointer-events: none, `mix-blend-mode: multiply`)
   3. `BlockLinkLayer` (pointer-events: none, 연결 블록 외곽선)
   4. text layer (pdf.js, 선택 가능)
-  5. `FigureLayer`의 `ⓘ` 배지만 pointer-events: auto
+  5. (오버레이에 pointer-events를 받는 요소 없음. 피규어는 hit-test 클릭으로 연다, §8.7)
 - **호버 판정은 오버레이 요소가 아니라 hit-testing**: 페이지 컨테이너의 `pointermove`(rAF throttle) → `lib/coords.ts`로 page pt 변환 → `lib/hitTest.ts`가 우선순위 figure > highlight > block으로 판정. 이렇게 해야 텍스트 선택을 방해하지 않는다.
 - pdf.js TextLayer API는 버전마다 다르다. 설치된 버전의 타입 정의를 읽고 사용할 것.
 
@@ -558,6 +558,7 @@ Same as /paper-digest: under `claude -p`, never pass --force; report instead of 
 - 카드 스케일 `s = cardInnerWidth / page.width`. 기본 글자 크기 `= body_font_size * s * 0.95`, 최소 11px.
 - 블록 배치 (React `useLayoutEffect`로 측정 후 absolute 배치):
   - 1단 페이지: 한 열. 2단 페이지: `column_split` 기준 두 열을 원문과 같은 x 비율로 배치. `column=-1` 블록은 두 열 전체 폭.
+  - 한 단 모드(번역 패널 < 1/3): 2단 페이지의 블록이 모두 본문 폭 전체로 읽는 순서대로 쌓인다. 피규어·수식은 원래 크기로 가운데. 글자 최소 14px.
   - 블록은 `order` 순. 각 블록 `top = max(이전 블록 bottom + 4px, bbox.y0 * s)` → 공간이 남으면 원문과 같은 높이에, 번역이 길면 아래로 밀린다. band(2단 사이의 걸침 블록) 시작 위치는 두 열 bottom의 최댓값.
   - 카드 높이 = `max(page.height * s, 마지막 bottom + padding)`.
 - 블록 종류별 렌더:
@@ -617,8 +618,8 @@ function mapRef(y: number, from: PaneLayout, to: PaneLayout): number {
 
 ### 8.7 피규어 호버 해설 (요청 기능)
 
-- `FigureLayer`: 각 피규어 bbox 우하단에 `ⓘ` 배지 (항상 은은하게 표시, hover 시 진하게). `confidence < 0.6`이면 bbox 점선 외곽선 + 배지에 `?`.
-- **열기**: 피규어 영역에 350ms 체류 또는 배지 hover → popover. **닫기**: 영역·popover를 모두 벗어나고 200ms 경과. 배지 클릭 또는 피규어 안 단순 클릭 → **고정(pin)**, `Esc`/바깥 클릭으로 닫음. 동시에 하나만.
+- 페이지 위에 배지는 없다. 피규어 위에서는 커서가 pointer로 바뀐다. `confidence < 0.6`이면 bbox 점선 외곽선.
+- **열기**: 피규어 안을 클릭(텍스트 선택이 아닐 때) → 고정 popover. **닫기**: 같은 피규어를 다시 클릭, 페이지의 다른 곳이나 바깥 클릭, `Esc`, × 버튼. 동시에 하나만. 사이드바 Figures 탭에서도 연다(키보드 접근). hover로는 열지 않는다(하이라이트 tooltip만 hover).
 - 위치: 피규어 오른쪽에 공간이 있으면 오른쪽, 없으면 아래, 뷰포트 안으로 clamp. 최대 폭 420px, 최대 높이 60vh 스크롤.
 - 내용: `label` + 요약(굵게) → `body_md` (읽는 법, 관찰 bullet, 본문 연결) → 버튼 `[자세히]`(drawer 설명 탭에 전체 + 이어서 질문) `[질문하기]`(채팅 탭에 피규어 컨텍스트 첨부) `[한/EN]`.
 - 해설이 없거나 SKIP: "해설 없음" + reason + `[지금 생성]` → Phase 5 영역 설명 API를 피규어 bbox로 호출, 결과를 popover에 스트리밍 (이 결과는 캐시에만 저장, `figure_notes.md`에는 쓰지 않는다 — 사전 생성물은 skill+verify 경로로만).
@@ -845,7 +846,7 @@ PyMuPDF로 생성하는 3페이지 논문 "FooNet":
   1. 라이브러리 → 리더 열림, 3페이지 placeholder 높이 정확.
   2. PdfPane을 2페이지 상단으로 스크롤 → TranslationPane의 2페이지 카드 상단이 같은 reference line ±40px.
   3. TranslationPane을 스크롤해도 반대 방향 싱크. 🔒 끄면 싱크 안 됨.
-  4. Figure 1 영역 hover → 400ms 내 popover에 요약 텍스트, 배지 클릭 시 pin, Esc 닫힘.
+  4. Figure 1 영역 클릭 → popover에 요약 텍스트(고정), 다시 클릭·바깥 클릭·Esc로 닫힘. hover만으로는 열리지 않음.
   5. `H` → 하이라이트 레이어 숨김/표시, 사이드바 항목 클릭 → 해당 페이지로 이동.
   6. 텍스트 드래그 선택 → 툴바 → `설명` → drawer에 `FAKE[text]` 스트리밍 + `[p.N]` 링크 클릭 시 이동 + ✓ 배지.
   7. Ctrl+드래그 → crop 미리보기 이미지 + `FAKE[region]`.
